@@ -1,0 +1,215 @@
+#lang racket
+(require racket/trace)
+
+;; Funcion principal: ejecuta esto para empezar
+;; (Probablemente no hace falta modificar esta funcion)
+(define(inicio )
+  (cond [(empty? (imprimir " RESULTADO " (evaluar(validar-sintaxis(leer)))))null]
+        [else inicio]))
+
+;; Funcion  encargada de validar la sintaxis de la expresion
+(define(validar-sintaxis expresion)
+  (cond [(empty? expresion) null]
+        [(not (validar-expresion expresion)) null]  
+        [else expresion]))
+              
+;; Funcion encargada de validar una expresion lambda
+;; <expresion> ::= <identificador>
+;; <expresion> ::= (L   <identificador>  _  <expresion>)
+;; <expresion> ::= (<expresion>    <expresion>)
+(define (validar-expresion expresion)
+  (validar-aux (sustituir-numeros (sustituir-alias expresion))))
+
+(define (validar-aux expresion)
+  (cond [(empty? expresion) #f]
+        [(validar-identificador expresion) #t]                ; Si la expresion es un identificador es VALIDO.
+        [(and (list? expresion)(equal? 4 (length expresion))  ; Si es una lista que contiene 4 elementos
+         (equal? 'L (car expresion))                          ; el primer elemento es "L"
+         (validar-identificador (car (cdr expresion)))        ; su segundo elemento es un identificador
+         (equal? '_ (car (cdr (cdr expresion))))              ; su tercer elemento es un "_"
+         (validar-expresion (car (cdr (cdr (cdr expresion)))))) #t]  ; y su cuarto elemento una expresion es  VALIDO.
+        [(and (list? expresion)(equal? 2 (length expresion))  ; si es una lista con dos elementos que son expresiones validas, es VALIDO.
+         (and (validar-expresion (car expresion)) (validar-expresion (car (cdr expresion))))) #t]  
+        [else #f]))
+
+;; Funcion encargada de validar un identificador.
+(define (validar-identificador identificador)  
+  (cond [(and (not (list? identificador)) (not (string-contains? (symbol->string identificador) " "))) #t]
+        [else #f]))
+ 
+          
+;; Funcion que dado un numero devuelve la formula de dado numero (solo positivos)
+;; (ej: 1) por su formula (ej: (L f _ (L x _ (f x))) )
+;;
+(define(numero-a-formula num)
+  (cond [(not (number? num)) null]
+        [(< num 0) null]
+        [else (append '(L f _)  (cons (append '(L x _) (cons (agregar-fs num) null)) null))]
+              ;; Modificar para que genere la formula para el
+              ;; numero dado
+        ))
+(define (agregar-fs num)
+  (cond [ (= 0 num) 'x ]
+        [ (= 1 num) (cons 'f (cons 'x null))]
+        [else (cons 'f (cons (agregar-fs (- num 1)) null))]))
+
+
+;; Funcion encargada de convertir la formula a un numero
+;; Ej:
+;; (L f _ (L x _ (f x))) por el numero 1
+;; o tambien
+;; (L y _ (L p _ (y p))) por el numero 1
+;;
+;; (es la estructura que importa no el nombre de las variables!!)
+;;
+(define (formula-a-numero formula)
+        (cond [(empty? formula) null]
+              [(and (list? formula)(validar-expresion formula)(>= (length formula) 3)(>= (length (cadddr formula)) 3)
+                    (equal? (cadr (cadddr formula))(cadddr (cadddr formula)))) '0]    ; Retorna 0 en caso de tener la estructura; (L f _ (L x _  x))
+              [(and (list? formula)(validar-expresion formula)(>= (length formula) 3)(>= (length (cadddr formula)) 3)
+                    (determinar-numero (cadddr (cadddr formula)) (cadr formula) (cadr (cadddr formula)) 0))]  ; Determina el posible numero en caso de
+              [else formula]))                                                                              ; tener la estructura; (L f _ (L x _ ...)
+
+(define (determinar-numero formula ident1 ident2 num)
+  (cond [(and (equal? 2 (length formula))(equal? ident1 (car formula))(list? (cadr formula))) ; Si la lista tiene long 2, el segundo elemento es una lista y el primer elemento es igual
+         (determinar-numero (cadr formula) ident1 ident2 (+ 1 num))]             ; al primer identificador (f en el ejemplo) llamara al inicio de la funcion aumentando en 1 num.
+        [(and (equal? 2 (length formula))(equal? ident1 (car formula))(equal? ident2 (cadr formula))) (+ 1 num)] ; Si el segund o elemento ya no es una lista
+        [else formula]))                                                        ; y es igual al segundo identificador (x en el ejemplo) retornara num aumentado en 1.
+
+
+;; recorre la expresion y sustituye todos los numeros por formulas
+(define (sustituir-numeros expresion)
+  (cond [(empty? expresion) null] ; si es una lista vacia 
+        [(not (pair? expresion))  ; si no es un par/ es un solo atomo
+         (if (number? expresion) (numero-a-formula expresion) expresion)]  ;si es un numero, cambia el valor por su formula
+        [else (cons (sustituir-numeros (car expresion))  ;pasa recursivamente sobre el car y el cdr de la lista 
+                    (sustituir-numeros (cdr expresion)))]))
+
+(define (sustituir-formulas expresion)
+  (cond [(empty? expresion) null]
+        [(not (pair? expresion)) expresion]
+        [(and (pair? expresion)(number? (formula-a-numero expresion))) (formula-a-numero expresion)]
+        [else (cons (sustituir-formulas (car expresion))
+                    (sustituir-formulas (cdr expresion)))]))
+
+;; Funcion encargada de la reduccion-beta.
+;; Ej: (L x _ (x x)) 2 ==> (2 2)
+;; realiza 1 sola reduccion
+(define (reduccion-beta expresion)
+  (cond [(empty? expresion) null]
+        [(not (reducible? expresion)) expresion]    ; Si la expresion no es reducible, retorna la expresion.
+        [(and (equal? 2 (length expresion)) (reducible? (car expresion))) ; Si es una lista de long 2, y el primer elemento es una lista reducible
+         (reducir expresion (car expresion))]                             ; lo reducira completamente.
+        [(and (equal? 2 (length expresion)) (reducible? (cadr expresion))); Si es una lista de long2, y el segundo elemento es una lista reducible
+         (reducir expresion (cadr expresion))]                            ; lo reducira completamente.
+        [else (reducir expresion expresion)]))      ; Si ambos elementos estan reducidos, los reducira entre si.      
+
+; Funcion que realiza la reduccion.
+(define (reducir expresion expresion-a-reducir)
+  (reemplazar expresion (buscar-reducible expresion-a-reducir)
+              (reemplazar (car (cdddar (buscar-reducible expresion-a-reducir)))
+                          (cadar (buscar-reducible expresion-a-reducir))
+                          (cadr (buscar-reducible expresion-a-reducir)))))
+
+
+;; Funcion encargada de determinar si una expresion es reducible.
+(define (reducible? expresion)
+  (cond [(empty? expresion) #f]
+        [(not (list? expresion)) #f] ; Si no es una lista es que es solo un identificador
+        [(and (validar-expresion expresion) (equal? 2 (length expresion)) (list? (car expresion)) ; Si es una expresion y tiene 2 elementos que tambien son expreciones,
+              (if (list? (caar expresion)) (equal? 'L (caaar expresion)) (equal? 'L (caar expresion)))) #t] ; y el primer elemento esta de la forma (L x _ (expresion)), es reducible.
+        [(and (validar-expresion expresion) (equal? 4 (length expresion))) (reducible? (cadddr expresion))] 
+       [(and (validar-expresion expresion) (equal? 2 (length expresion)) (list? (cadr expresion)) (reducible? (cadr expresion)))  #t] 
+        [else #f]))
+
+;; Funcion encargada de retornar la expresion reducible mas profunda de la lista.
+(define (buscar-reducible expresion)
+  (cond [(not (reducible? expresion)) expresion] ; Si ya no es reducible retorna la expresion.
+        [(and (equal? 2 (length expresion))(reducible? (car expresion))) (buscar-reducible (car expresion))]  
+        [(and (equal? 2 (length expresion))(reducible? (cadr expresion))) (buscar-reducible (cadr expresion))]
+        [(equal? 2 (length expresion)) expresion]
+        [else (buscar-reducible (cadddr expresion))] ))
+
+;; Funcion encargada de reemplazar un primer valor por un segundo dentro de una lista.
+(define (reemplazar lista exp new-exp)
+  (cond [(empty? lista) null]
+        [(equal? lista exp) new-exp]
+        [(not (pair? lista)) (if (equal? lista exp) new-exp lista)]
+        [else (cons (reemplazar (car lista) exp new-exp)(reemplazar (cdr lista) exp new-exp))]
+        ))
+
+;; Funcion encargada de evaluar la expresion y obtener un resultado
+;; combina todas las funciones anteriores para sustituir, luego hacer reducciones
+;; hasta obtener un resultado simplificado.. y finalmente sustituye formulas por
+;; numeros.
+;;
+;; La funcion tambien imprime en cada paso lo que hizo, e indica la regla que
+;; utilizo
+;;
+;; Ej:
+;;     (((L x _ (L y _ (x y))) 1) 2)
+;;
+;; La funcion imprime (como efecto secundario) a la pantalla:
+;;     (((L x _ (L y _ (x y))) (L f _ (L x _ (f x)))) 2)    [sust-num]
+;;     (((L x _ (L y _ (x y))) (L f _ (L x _ (f x)))) (L f _ (L x _ (f (f x))))) [sust-num]
+;;     ((L y _ ((L f _ (L x _ (f x))) y)))  (L f _ (L x _ (f (f x)))))    [red-beta]
+;;     (L y _ ((L f _ (L x _ (f x))) (L f _ (L x _ (f (f x)))))))      [red-beta]
+;;     (L y _ ((L f _ (L x _ (f x))) (L ff _ (L xx _ (ff (ff xx)))) )))   [sust-variables x -> xx y f --> ff]
+;;     (L y _ (L x _ (L ff _ (L xx _ (ff (ff xx)) )) x))    [red-beta]
+;;     (L y _ (L x _ (L xx _ (x (x xx)))))  [red-beta]
+;;     (L y _ (L x _ (L xx _ (x (x xx)))))  [red-beta]
+;;     (L y _  2)   [sust-formula  (L x _ (L xx _ (x (x xx))))--> 2]
+;;
+;; Pero devuelve:
+;;     (L y _ 2)
+;;
+(define (evaluar expresion)
+  (print expresion) (newline)              ; Imprime la expresion.
+  (imprimir "[sust - num] -------->" (sustituir-numeros expresion)) ; Imprime la expresion con los numeros sustituidos.
+  (imprimir "[sust - alias] ------>" (sustituir-alias (sustituir-numeros expresion))) ; Imprime la expresion con los alias sustituidos.
+  (evaluar-aux-aux (evaluar-aux (sustituir-alias (sustituir-numeros expresion)))))    ; Evalua la expresion e imprime el resultado.
+
+(define (evaluar-aux expresion)
+  (imprimir "[Reduccion beta] -------->  " (reduccion-beta expresion))                ; Realiza la reduccion-beta imprimiendo cada paso.
+  (cond [(empty? expresion) null]
+        [(reducible? expresion) (evaluar-aux (reduccion-beta expresion))]             ; Si aun es reducible llamara al inicio de la funcion-aux.
+        [else expresion]))
+
+(define (evaluar-aux-aux expresion)                           
+  (if (equal? expresion (sustituir-formulas expresion))                               ; Sustituye las formulas por los numeros si es que es necesario.
+      (newline) (imprimir "[sust - form] ----->" (sustituir-formulas expresion)))
+  (sustituir-formulas expresion))
+
+
+(define (sustituir-alias expresion)
+  (cond [(empty? expresion) null] ; si es una lista vacia 
+        [(not (pair? expresion))  ; si no es un par/ es un solo atomo
+          (cond [(equal?  'SUMA expresion) '(L m _ (L n _ ( L f _ ( L x _ ((m f) ( (n f) x))))))]
+                 [(equal? 'SUCC expresion) '(L n _ (L f _ ( L x _ ((n f) x))))]
+                 [(equal? 'MULT expresion) '(L m _ (L n _ ( L f _ (m (n f)))))]
+                 [(equal? 'PRED expresion) '(L n _ (L f _ (L x _ ((n (L g _ (L h _ (h (g f)))))((L u _ x)( L u _ u))))))]
+                 [(equal? 'TRUE expresion) '(L x _ (L y _ x))]
+                 [(equal? 'FALSE expresion) '(L x _ (L y _ y))]
+                 [(equal? 'OR expresion) '(L p _ (L q _ (p (p q))))]
+                 [else expresion])]  ;si es un numero, cambia el valor por su formula
+        [else (cons (sustituir-alias  (car expresion))  ;pasa recursivamente sobre el car y el cdr de la lista 
+                    (sustituir-alias  (cdr expresion)))]))
+
+;;Funcion encargada de imprimir la expresion
+(define (imprimir expresion nombre)
+         (print expresion)
+         (print nombre)
+         (newline))
+
+;;funcion encargada de obtener datos del teclado
+(define (leer )
+	(read))
+
+;;Funciones de depuracion
+;;Habilite y deshabilite segun su necesidad
+;(trace inicio)
+;;(trace validar)
+;(trace evaluar)
+;(trace imprimir)
+;(trace leer)
+
